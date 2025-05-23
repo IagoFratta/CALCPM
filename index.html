@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cálculo de Preço Médio de Investimentos</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="p-4">
+  <div class="container">
+    <h1 class="mb-4">Calculadora de Preço Médio de Investimentos</h1>
+
+    <!-- Formulário de lançamento -->
+    <form id="transaction-form" class="row g-3 mb-4">
+      <div class="col-md-3">
+        <label for="asset" class="form-label">Ativo</label>
+        <input type="text" class="form-control" id="asset" placeholder="Ex: FUND1" required>
+      </div>
+      <div class="col-md-2">
+        <label for="type" class="form-label">Operação</label>
+        <select class="form-select" id="type" required>
+          <option value="buy">Compra</option>
+          <option value="sell">Venda</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label for="quantity" class="form-label">Cotas</label>
+        <input type="number" class="form-control" id="quantity" min="1" step="1" value="1" required>
+      </div>
+      <div class="col-md-2">
+        <label for="price" class="form-label">Preço por Cota (R$)</label>
+        <input type="text" class="form-control text-end" id="price" placeholder="0,00" required>
+      </div>
+      <div class="col-md-3 d-flex align-items-end">
+        <button type="submit" class="btn btn-primary w-100">Adicionar Lançamento</button>
+      </div>
+    </form>
+
+    <!-- Ações principais -->
+    <div class="mb-4">
+      <button id="save-db" class="btn btn-success me-2">Salvar Banco</button>
+      <button id="toggle-adv" class="btn btn-secondary">Opções Avançadas ▼</button>
+    </div>
+
+    <!-- Ações avançadas ocultas -->
+    <div id="advanced" class="mb-4" style="display: none;">
+      <button id="export-json" class="btn btn-outline-success me-2">Exportar JSON</button>
+      <button id="import-json" class="btn btn-outline-secondary me-2">Importar JSON</button>
+      <button id="export-csv" class="btn btn-outline-primary me-2">Exportar CSV</button>
+      <button id="export-xlsx" class="btn btn-outline-primary me-2">Exportar XLSX</button>
+      <button id="export-pdf" class="btn btn-outline-dark">Exportar PDF</button>
+    </div>
+
+    <!-- Área de exibição de resultados -->
+    <div id="assets-container"></div>
+  </div>
+
+  <!-- Bibliotecas -->
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <!-- Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script>
+    const { jsPDF } = window.jspdf;
+    const apiUrl = '/api/db';
+    let data = {}, editAsset = null, editIndex = null;
+
+    // Máscara de moeda pt-BR
+    document.getElementById('price').addEventListener('input', e => {
+      let v = e.target.value.replace(/\D/g, '');
+      v = (v / 100).toFixed(2).replace('.', ',');
+      e.target.value = v;
+    });
+
+    // Carrega dados do servidor
+    async function loadDB() {
+      try {
+        const res = await fetch(apiUrl);
+        if (!res.ok) throw new Error();
+        data = await res.json();
+        updateDisplay();
+      } catch {
+        alert('Banco não encontrado. Importe um JSON.');
+      }
+    }
+
+    // Salvar banco atual via API
+    document.getElementById('save-db').addEventListener('click', async () => {
+      try {
+        const res = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data, null, 2)
+        });
+        if (!res.ok) throw new Error();
+        alert('Banco atualizado com sucesso.');
+      } catch (err) {
+        console.error(err);
+        alert('Erro ao salvar banco.');
+      }
+    });
+
+    // Toggle opções avançadas
+    document.getElementById('toggle-adv').addEventListener('click', () => {
+      const adv = document.getElementById('advanced');
+      adv.style.display = adv.style.display === 'block' ? 'none' : 'block';
+      document.getElementById('toggle-adv').textContent = adv.style.display === 'block' ? 'Opções Avançadas ▲' : 'Opções Avançadas ▼';
+    });
+
+    // Export JSON
+    document.getElementById('export-json').addEventListener('click', () => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      saveAs(blob, 'investments.json');
+    });
+
+    // Import JSON
+    document.getElementById('import-json').addEventListener('click', async () => {
+      const [h] = await window.showOpenFilePicker({ types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }] });
+      const f = await h.getFile();
+      data = JSON.parse(await f.text());
+      updateDisplay();
+      alert('JSON importado.');
+    });
+
+    // Export CSV
+    document.getElementById('export-csv').addEventListener('click', () => {
+      let csv = 'Ativo;Qtd Total;Preço Médio;Data/Hora;Tipo;Cotas;Preço\r\n';
+      Object.entries(data).forEach(([asset, e]) => {
+        const avg = e.averagePrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        csv += `${asset};${e.totalQuantity.toFixed(2)};${avg};;;;\r\n`;
+        e.transactions.forEach(tx => {
+          const t = tx.type === 'buy' ? 'Compra' : 'Venda';
+          const p = tx.price.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          csv += `;;;${tx.date};${t};${tx.quantity.toFixed(2)};${p}\r\n`;
+        });
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      saveAs(blob, 'investments.csv');
+    });
+
+    // Export XLSX
+    document.getElementById('export-xlsx').addEventListener('click', () => {
+      const rows = [['Ativo','Qtd Total','Preço Médio','Data/Hora','Tipo','Cotas','Preço']];
+      Object.entries(data).forEach(([asset, e]) => {
+        rows.push([asset, e.totalQuantity.toFixed(2), e.averagePrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), '', '', '', '']);
+        e.transactions.forEach(tx => rows.push(['', '', '', tx.date, tx.type === 'buy' ? 'Compra' : 'Venda', tx.quantity.toFixed(2), tx.price.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })]));
+      });
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Investimentos');
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      saveAs(new Blob([wbout], { type: 'application/octet-stream' }), 'investments.xlsx');
+    });
+
+    // Export PDF
+    document.getElementById('export-pdf').addEventListener('click', () => {
+      const pdf = new jsPDF(); let y = 20;
+      pdf.text('Relatório de Investimentos', 10, 10);
+      Object.entries(data).forEach(([asset, e]) => {
+        pdf.setFontSize(12);
+        pdf.text(`Ativo: ${asset} | Qtd: ${e.totalQuantity.toFixed(2)} | PM: R$ ${e.averagePrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 10, y);
+        y += 6;
+        e.transactions.forEach(tx => {
+          pdf.setFontSize(10);
+          pdf.text(`${tx.date} | ${tx.type === 'buy' ? 'Compra' : 'Venda'} | ${tx.quantity.toFixed(2)} | R$ ${tx.price.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 12, y);
+          y += 6;
+        });
+        y += 4; if (y > 270) { pdf.addPage(); y = 20; }
+      });
+      pdf.save('investments.pdf');
+    });
+
+    // Lógica interna: recalc, add, edit, delete, display
+    function recalc(e) { e.totalQuantity = 0; e.totalCost = 0; e.transactions.forEach(tx => { if (tx.type === 'buy') { e.totalQuantity += tx.quantity; e.totalCost += tx.quantity * tx.price; } else { e.totalQuantity -= tx.quantity; e.totalCost -= tx.quantity * e.averagePrice; } }); e.averagePrice = e.totalQuantity ? e.totalCost / e.totalQuantity : 0; }
+    function addTransaction(asset, type, qty, priceText, date = new Date().toLocaleString()) { const price = parseFloat(priceText.replace(/\D/g, '').replace(',', '.')) / 100; const quantity = parseFloat(qty); if (!data[asset]) data[asset] = { transactions: [], totalQuantity: 0, totalCost: 0, averagePrice: 0 }; const e = data[asset]; e.transactions.push({ type, quantity, price, date }); recalc(e); updateDisplay(); }
+    function deleteTransaction(asset, i) { data[asset].transactions.splice(i, 1); if (!data[asset].transactions.length) delete data[asset]; else recalc(data[asset]); updateDisplay(); }
+    function editTransaction(asset, i) { const tx = data[asset].transactions[i]; document.getElementById('asset').value = asset; document.getElementById('type').value = tx.type; document.getElementById('quantity').value = tx.quantity; document.getElementById('price').value = (tx.price*100).toFixed(0).replace(/(\d+)(\d{2})$/, '$1,$2'); editAsset = asset; editIndex = i; }
+    function updateDisplay() { const c = document.getElementById('assets-container'); c.innerHTML = ''; Object.entries(data).forEach(([asset, e]) => { const card = document.createElement('div'); card.className = 'card mb-4'; card.innerHTML = `<div class="card-header"><h5>${asset}</h5><p>Quantidade: ${e.totalQuantity.toFixed(2)}</p><p>Preço Médio: R$ ${e.averagePrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p></div>`; const body = document.createElement('div'); body.className = 'card-body p-0'; let rows = ''; e.transactions.forEach((tx, i) => { rows += `<tr><td>${tx.date}</td><td>${tx.type === 'buy' ? 'Compra' : 'Venda'}</td><td>${tx.quantity.toFixed(2)}</td><td>R$ ${tx.price.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td><button class="btn btn-sm btn-warning me-1" onclick="editTransaction('${asset}',${i})">Editar</button><button class="btn btn-sm btn-danger" onclick="deleteTransaction('${asset}',${i})">Excluir</button></td></tr>`; }); body.innerHTML = `<table class="table table-striped m-0"><thead><tr><th>Data/Hora</th><th>Tipo</th><th>Cotas</th><th>Preço (R$)</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table>`; card.appendChild(body); c.appendChild(card); }); }
+
+    document.getElementById('transaction-form').addEventListener('submit', e => { e.preventDefault(); addTransaction(document.getElementById('asset').value.trim(), document.getElementById('type').value, document.getElementById('quantity').value, document.getElementById('price').value); e.target.reset(); });
+    window.addEventListener('load', loadDB);
+  </script>
+</body>
+</html>
